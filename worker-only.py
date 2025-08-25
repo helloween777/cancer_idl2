@@ -49,8 +49,9 @@ spark = (
     .config("spark.port.maxRetries", "64")
     .config("spark.pyspark.python", THIS_PY)
     .config("spark.pyspark.driver.python", THIS_PY)
-    .config("spark.sql.shuffle.partitions", "8")
+    .config("spark.sql.shuffle.partitions", "5")
     .config("spark.network.timeout", "300s")
+    .config("spark.eventLog.enabled", "false")  # desactivar eventlog para evitar problemas con el host
     .getOrCreate()
 )
 
