@@ -152,9 +152,6 @@ pdf = pdf[ordered_cols]
 # Crear DataFrame en Spark con esquema explícito
 sdf = spark.createDataFrame(pdf, schema=schema)
 
-print(pdf.columns.tolist())
-print(pdf.dtypes)
-
 sdf = spark.createDataFrame(pdf, schema=schema)
 print("Conteo en Spark:", sdf.count())
 sdf.printSchema()
@@ -279,4 +276,6 @@ with pd.ExcelWriter(out_path, engine="openpyxl") as w:
 print(f"Excel guardado en: {out_path.resolve()}")
 
 print("Proceso completo OK.")
+
+
 # spark.stop()  # descomenta si quieres cerrar Spark explícitamente
