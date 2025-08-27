@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from pyspark.sql import SparkSession, types as T
 from pyspark.ml import Pipeline
-from pyspark.ml.feature import VectorAssembler, StandardScaler
+from pyspark.ml.feature import StringIndexer, OneHotEncoder, VectorAssembler, StandardScaler
 from pyspark.ml.classification import LogisticRegression, LogisticRegressionModel
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
@@ -106,12 +106,28 @@ def make_synthetic_breast_cancer(n=1200, seed=42):
     X = np.vstack([X_b, X_m])
     y = np.vstack([y_b, y_m]).ravel()
 
-    # Mezclar
-    idx = rng.permutation(len(y))
-    X = X[idx]; y = y[idx]
+    # Sexo: 1=femenino, 0=masculino (80% femenino)
+    sex = rng.choice([0, 1], size=n, p=[0.2, 0.8])
 
-    pdf = pd.DataFrame(X, columns=features)
-    pdf["label"] = y
+    # Edad: benignos ~ N(45, 8), malignos ~ N(55, 10)
+    age = np.concatenate([
+        rng.normal(45, 8, size=n_ben),
+        rng.normal(55, 10, size=n_mal)
+    ])
+    age = np.clip(age, 18, 90).astype(int)
+
+    # Región: aleatoria entre 3 zonas
+    regions = ["Costa", "Sierra", "Selva"]
+    region = rng.choice(regions, size=n).astype(str)
+
+    # Mezclar todo
+    idx = rng.permutation(n)
+    pdf = pd.DataFrame(X[idx], columns=features)
+    pdf["label"] = y[idx]
+    pdf["sex"] = sex[idx]
+    pdf["age"] = age[idx]
+    pdf["region"] = region[idx]
+    
     return pdf
 
 pdf = make_synthetic_breast_cancer(n=1500, seed=123)
@@ -121,8 +137,23 @@ print("Filas generadas (pandas):", len(pdf))
 # 3) pandas -> Spark DF (schema explícito)
 # =============================
 schema = T.StructType([
-    T.StructField(c, T.DoubleType(), nullable=False) for c in pdf.columns if c != "label"
-]).add(T.StructField("label", T.IntegerType(), nullable=False))
+    T.StructField(c, T.DoubleType(), nullable=False) for c in pdf.columns if c not in ["label", "sex", "age", "region"]
+] + [
+    T.StructField("sex", T.IntegerType(), nullable=False),
+    T.StructField("age", T.IntegerType(), nullable=False),
+    T.StructField("region", T.StringType(), nullable=False),  
+    T.StructField("label", T.IntegerType(), nullable=False)
+])
+
+# Reordenar columnas para que coincidan con el esquema
+ordered_cols = [c for c in pdf.columns if c not in ["label", "sex", "age", "region"]] + ["sex", "age", "region", "label"]
+pdf = pdf[ordered_cols]
+
+# Crear DataFrame en Spark con esquema explícito
+sdf = spark.createDataFrame(pdf, schema=schema)
+
+print(pdf.columns.tolist())
+print(pdf.dtypes)
 
 sdf = spark.createDataFrame(pdf, schema=schema)
 print("Conteo en Spark:", sdf.count())
@@ -137,12 +168,19 @@ print("Train:", train_sdf.count(), "| Test:", test_sdf.count())
 # =============================
 # 5) Pipeline de ML
 # =============================
-feature_cols = [c for c in sdf.columns if c != "label"]
-assembler = VectorAssembler(inputCols=feature_cols, outputCol="features_raw")
+feature_cols = [c for c in sdf.columns if c not in ["label", "region"]]
+
+indexer = StringIndexer(inputCol="region", outputCol="region_index")
+encoder = OneHotEncoder(inputCol="region_index", outputCol="region_encoded")
+
+assembler = VectorAssembler(inputCols=feature_cols + ["region_encoded"], outputCol="features_raw")
 scaler = StandardScaler(inputCol="features_raw", outputCol="features", withMean=True, withStd=True)
+
 lr = LogisticRegression(featuresCol="features", labelCol="label",
                         predictionCol="prediction", probabilityCol="probability")
-pipe = Pipeline(stages=[assembler, scaler, lr])
+
+pipe = Pipeline(stages=[indexer, encoder, assembler, scaler, lr])
+
 
 # =============================
 # 6) Cross-Validation (k=5) con parallelism=1
